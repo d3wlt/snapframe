@@ -47,7 +47,7 @@ enum OverlayDraw {
     }
 
     /// Hairline width in points for the current backing scale.
-    static func hairline(_ view: NSView) -> CGFloat { 1 / max(view.window?.backingScaleFactor ?? 2, 1) }
+    @MainActor static func hairline(_ view: NSView) -> CGFloat { 1 / max(view.window?.backingScaleFactor ?? 2, 1) }
 }
 
 struct EventBox: @unchecked Sendable { let event: NSEvent? }

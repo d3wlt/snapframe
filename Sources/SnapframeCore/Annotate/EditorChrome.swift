@@ -293,7 +293,8 @@ struct BackgroundSidebar: View {
                 }
                 presetGrid
                 Divider()
-                Picker("", selection: Binding(get: { fillKind }, set: setKind)) {
+                // Closure, not `set: setKind`: the method reference crashes swiftc 6.2.3 IRGen (reabstraction thunk for FillKind).
+                Picker("", selection: Binding(get: { fillKind }, set: { setKind($0) })) {
                     ForEach(FillKind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented).labelsHidden()

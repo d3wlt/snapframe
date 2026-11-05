@@ -2,6 +2,7 @@ import AppKit
 
 /// Persistent capture history: an `index.json` next to the stored files. Main-thread use.
 /// The shared store follows `HistoryStore.directory` on every operation (tests swap it per test).
+@MainActor
 public final class HistoryStore {
     public static let shared: HistoryStore = {
         let store = HistoryStore(directory: nil)
@@ -9,7 +10,8 @@ public final class HistoryStore {
         // Editors post the updated item (new size after a crop, etc.); keep the index in sync.
         store.updateObserver = NotificationCenter.default.addObserver(forName: .snapframeItemUpdated, object: nil,
                                                                       queue: .main) { [weak store] note in
-            if let item = note.object as? CapturedItem { store?.update(item) }
+            // queue: .main delivers on the main thread.
+            if let item = note.object as? CapturedItem { MainActor.assumeIsolated { store?.update(item) } }
         }
         return store
     }()
@@ -34,7 +36,7 @@ public final class HistoryStore {
 
     /// Items still on screen (Quick Access cards, pins) are never pruned. Main thread only.
     var inUseIDs: () -> Set<UUID> = {
-        MainActor.assumeIsolated { QuickAccessController.shared.openItemIDs.union(PinController.shared.openItemIDs) }
+        QuickAccessController.shared.openItemIDs.union(PinController.shared.openItemIDs)
     }
 
     init(directory: URL?) {
@@ -111,13 +113,11 @@ public final class HistoryStore {
     // MARK: - Internals
 
     private func scheduleHourlyPrune() {
-        let schedule = { [weak self] in
-            self?.timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
-                self?.prune()
-            }
-            self?.timer?.tolerance = 120
+        timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            // Scheduled from the main-actor `shared` initialiser, so it fires on the main run loop.
+            MainActor.assumeIsolated { self?.prune() }
         }
-        if Thread.isMainThread { schedule() } else { DispatchQueue.main.async(execute: schedule) }
+        timer?.tolerance = 120
     }
 
     private func loadIfNeeded() {
@@ -145,8 +145,7 @@ public final class HistoryStore {
 
     private func commit() {
         save()
-        let post = { NotificationCenter.default.post(name: Self.didChange, object: self) }
-        if Thread.isMainThread { post() } else { DispatchQueue.main.async(execute: post) }
+        NotificationCenter.default.post(name: Self.didChange, object: self)
     }
 
     private func save() {

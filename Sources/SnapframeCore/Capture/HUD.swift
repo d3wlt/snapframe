@@ -6,7 +6,7 @@ private final class HUDPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-private func hudPanel(size: CGSize, on screen: NSScreen?, anchorY: CGFloat) -> NSPanel {
+@MainActor private func hudPanel(size: CGSize, on screen: NSScreen?, anchorY: CGFloat) -> NSPanel {
     let frame = (screen ?? NSScreen.main)?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
     let rect = CGRect(x: frame.midX - size.width / 2, y: frame.minY + frame.height * anchorY - size.height / 2,
                       width: size.width, height: size.height)
@@ -22,13 +22,13 @@ private func hudPanel(size: CGSize, on screen: NSScreen?, anchorY: CGFloat) -> N
     return panel
 }
 
-private func hudBackground(size: CGSize, radius: CGFloat) -> NSVisualEffectView {
+@MainActor private func hudBackground(size: CGSize, radius: CGFloat) -> NSVisualEffectView {
     let v = NSVisualEffectView(frame: CGRect(origin: .zero, size: size))
     v.material = .hudWindow
     v.blendingMode = .behindWindow
     v.state = .active
     // A mask image (not a layer mask) makes the window shadow follow the rounded shape.
-    let mask = NSImage(size: CGSize(width: radius * 2 + 1, height: radius * 2 + 1), flipped: false) { rect in
+    let mask = NSImage(size: CGSize(width: radius * 2 + 1, height: radius * 2 + 1), flipped: false) { @Sendable rect in
         NSColor.black.setFill()
         NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
         return true

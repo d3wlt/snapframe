@@ -1,11 +1,11 @@
 import AppKit
 import UniformTypeIdentifiers
 
-public enum MediaKind: String, Codable { case image, video, gif }
+public enum MediaKind: String, Codable, Sendable { case image, video, gif }
 
 /// One capture. `fileURL` always points at Snapframe's own copy inside the history directory;
 /// saving to the export location makes a separate copy (`savedURL`).
-public struct CapturedItem: Identifiable, Codable, Hashable {
+public struct CapturedItem: Identifiable, Codable, Hashable, Sendable {
     public let id: UUID
     public var kind: MediaKind
     public var fileURL: URL
@@ -56,6 +56,7 @@ extension Notification.Name {
 }
 
 /// Turns raw captures into stored items.
+@MainActor
 public enum ItemFactory {
     /// Encodes a screenshot with the user's format, writes it to the history directory and returns the item.
     /// Post-processing (1x scaling, sRGB, border, background preset) is applied by ImagePostProcessor first.

@@ -1,7 +1,7 @@
 import AppKit
 
 /// A display with its frame in AppKit global coordinates (bottom-left origin, all screens in one space).
-public struct DisplayInfo: Equatable {
+public struct DisplayInfo: Equatable, Sendable {
     public var id: CGDirectDisplayID
     public var frame: CGRect
     public init(id: CGDirectDisplayID, frame: CGRect) {

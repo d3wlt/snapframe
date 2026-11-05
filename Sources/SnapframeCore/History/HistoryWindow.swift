@@ -51,14 +51,15 @@ final class HistoryModel: ObservableObject {
             MainActor.assumeIsolated { self?.reload() }
         })
         observers.append(center.addObserver(forName: .snapframeItemUpdated, object: nil, queue: .main) { [weak self] note in
+            let id = (note.object as? CapturedItem)?.id
             MainActor.assumeIsolated {
-                if let id = (note.object as? CapturedItem)?.id { self?.revisions[id, default: 0] += 1 }
+                if let id { self?.revisions[id, default: 0] += 1 }
                 self?.reload()
             }
         })
     }
 
-    deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+    isolated deinit { observers.forEach(NotificationCenter.default.removeObserver) }
 
     func reload() {
         let fm = FileManager.default

@@ -140,7 +140,7 @@ private struct RecordingGeneral: View {
                 Toggle("Show keystrokes", isOn: $keystrokes)
                     .onChange(of: keystrokes) { _, on in
                         if on && !AXIsProcessTrusted() {
-                            let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+                            let key = "AXTrustedCheckOptionPrompt"
                             _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
                         }
                     }

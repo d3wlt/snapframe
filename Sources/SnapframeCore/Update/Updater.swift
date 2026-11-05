@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Security
+import Synchronization
 
 // One-click updates from a self-hosted feed (`update.json` + versioned zips). The feed URL comes from the app's
 // Info.plist key `SnapframeUpdateURL`, filled at build time, so it never lives in the source; builds without it
@@ -138,7 +139,7 @@ public final class Updater: @unchecked Sendable {
     }
 
     /// nil manifest = up to date.
-    public func check(completion: @escaping (Result<UpdateManifest?, UpdateError>) -> Void) {
+    public func check(completion: @escaping @MainActor @Sendable (Result<UpdateManifest?, UpdateError>) -> Void) {
         guard let manifestURL else { return DispatchQueue.main.async { completion(.failure(.notConfigured)) } }
         queue.async { [self] in
             let result: Result<UpdateManifest?, UpdateError> = Result {
@@ -155,7 +156,7 @@ public final class Updater: @unchecked Sendable {
     /// `allowElevation: false` (headless) fails with `.notWritable` instead of asking for an administrator.
     public func install(_ manifest: UpdateManifest, allowElevation: Bool = true,
                         elevatedRunner: (@Sendable (String) -> UpdateError?)? = nil,
-                        completion: @escaping (Result<Void, UpdateError>) -> Void) {
+                        completion: @escaping @MainActor @Sendable (Result<Void, UpdateError>) -> Void) {
         guard let manifestURL, let zipURL = UpdateLogic.archiveURL(manifest, relativeTo: manifestURL) else {
             return DispatchQueue.main.async { completion(.failure(.notConfigured)) }
         }
@@ -241,17 +242,17 @@ public final class Updater: @unchecked Sendable {
     }
 
     private func fetch(_ url: URL) throws -> Data {
-        var out: Result<Data, Error> = .failure(UpdateError.network("no response"))
+        let out = Mutex<Result<Data, Error>>(.failure(UpdateError.network("no response")))
         let done = DispatchSemaphore(value: 0)
         session.dataTask(with: url) { data, response, error in
-            if let error { out = .failure(UpdateError.network(error.localizedDescription)) }
+            if let error { out.withLock { $0 = .failure(UpdateError.network(error.localizedDescription)) } }
             else if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                out = .failure(UpdateError.network("HTTP \(http.statusCode)"))
-            } else if let data { out = .success(data) }
+                out.withLock { $0 = .failure(UpdateError.network("HTTP \(http.statusCode)")) }
+            } else if let data { out.withLock { $0 = .success(data) } }
             done.signal()
         }.resume()
         done.wait()
-        return try out.get()
+        return try out.withLock { $0 }.get()
     }
 
     private func run(_ tool: String, _ args: [String]) -> Bool {

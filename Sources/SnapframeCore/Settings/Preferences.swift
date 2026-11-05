@@ -134,10 +134,11 @@ public enum HistoryRetention: String, CaseIterable {
 }
 
 public enum Prefs {
+    // UserDefaults is thread-safe; the reference is only swapped by test/screenshot setup before any use.
     /// Overridable for tests.
-    public static var store: UserDefaults = .standard
+    public nonisolated(unsafe) static var store: UserDefaults = .standard
 
-    public static let defaults: [String: Any] = [
+    public static var defaults: [String: Any] { [
         PrefKey.startAtLogin: false,
         PrefKey.playSounds: false,
         PrefKey.shutterSound: "Default",
@@ -227,7 +228,7 @@ public enum Prefs {
 
         PrefKey.lastArea: "",
         PrefKey.lastRecordingArea: "",
-    ]
+    ] }
 
     public static func register() {
         var all = defaults

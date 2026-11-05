@@ -28,6 +28,9 @@ private final class OnceFlag: @unchecked Sendable {
     }
 }
 
+// SCStream's control methods are thread-safe; the box only lets the start/stop task hold the stream the caller also keeps.
+private struct StreamBox: @unchecked Sendable { let stream: SCStream }
+
 /// SCStream → RecordingWriter. Sample handling happens on `queue`; control methods hop onto it.
 final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     struct Config {
@@ -148,10 +151,11 @@ final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     private static func startCapture(_ stream: SCStream, timeout: Double) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             let once = OnceFlag()
+            let box = StreamBox(stream: stream)
             Task {
                 do {
-                    try await stream.startCapture()
-                    if once.claim() { cont.resume() } else { try? await stream.stopCapture() }
+                    try await box.stream.startCapture()
+                    if once.claim() { cont.resume() } else { try? await box.stream.stopCapture() }
                 } catch {
                     if once.claim() { cont.resume(throwing: error) }
                 }

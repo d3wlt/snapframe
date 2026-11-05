@@ -3,7 +3,7 @@ import ScreenCaptureKit
 
 /// A rectangle on one display, in that display's points with a top-left origin
 /// (same convention as ScreenCaptureKit's sourceRect).
-public struct ScreenArea: Equatable, Codable {
+public struct ScreenArea: Equatable, Codable, Sendable {
     public var displayID: CGDirectDisplayID
     public var rect: CGRect
 

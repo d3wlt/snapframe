@@ -2,6 +2,9 @@ import AVFoundation
 import CoreMedia
 import ScreenCaptureKit
 
+// AVAssetWriter's status and error are safe to read from the finishWriting handler, its documented completion path.
+private struct WriterBox: @unchecked Sendable { let writer: AVAssetWriter }
+
 /// The writing half of the recorder: turns captured sample buffers into an MP4 with pause/resume support.
 /// It knows nothing about ScreenCaptureKit streams, so it can be driven with synthetic buffers in tests.
 /// Not thread-safe: the owner must call everything from one serial context.
@@ -150,7 +153,7 @@ final class RecordingWriter {
 
     /// Finalises the file. The recording ends at source time `hostTime`; a static screen delivers no
     /// frames, so the last frame is held until then. Fails (and deletes the file) if nothing usable was written.
-    func finish(endingAt hostTime: CMTime, completion: @escaping (Result<Output, Error>) -> Void) {
+    func finish(endingAt hostTime: CMTime, completion: @escaping @Sendable (Result<Output, Error>) -> Void) {
         guard !isFinished else {
             completion(.failure(failure ?? EngineError.writerFailed("already finished")))
             return
@@ -166,16 +169,17 @@ final class RecordingWriter {
             completion(.failure(failure ?? EngineError.noFrames))
             return
         }
-        var endTime = timeline.outputEnd(at: hostTime) ?? lastVideoOut
-        if CMTimeCompare(endTime, lastVideoOut) < 0 { endTime = lastVideoOut }
+        let rawEnd = timeline.outputEnd(at: hostTime) ?? lastVideoOut
+        let endTime = CMTimeCompare(rawEnd, lastVideoOut) < 0 ? lastVideoOut : rawEnd
         writer.endSession(atSourceTime: endTime)
         videoInput.markAsFinished()
         systemInput?.markAsFinished()
         micInput?.markAsFinished()
         let url = outputURL
         let size = CGSize(width: config.width, height: config.height)
-        let writer = self.writer
+        let box = WriterBox(writer: writer)
         writer.finishWriting {
+            let writer = box.writer
             if writer.status == .completed {
                 completion(.success(Output(url: url, pixelSize: size, duration: endTime.seconds)))
             } else {

@@ -3,8 +3,8 @@ import AppKit
 /// Background tool settings ("beautify"): padding + backdrop + rounded corners + shadow.
 /// Saved as presets (Prefs annBackgroundPresets, JSON) and optionally auto-applied to every
 /// screenshot (Prefs shotBackgroundPreset = preset id).
-public struct BackgroundStyle: Codable, Equatable, Identifiable {
-    public enum Fill: Codable, Equatable {
+public struct BackgroundStyle: Codable, Equatable, Identifiable, Sendable {
+    public enum Fill: Codable, Equatable, Sendable {
         case none
         case color(hex: String)
         case gradient(fromHex: String, toHex: String, angle: Double)

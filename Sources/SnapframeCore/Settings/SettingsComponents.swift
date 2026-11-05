@@ -116,7 +116,7 @@ private struct NSTickSlider: NSViewRepresentable {
         if Int(slider.doubleValue.rounded()) != value { slider.doubleValue = Double(value) }
     }
 
-    final class Coordinator: NSObject {
+    @MainActor final class Coordinator: NSObject {
         var parent: NSTickSlider
         init(_ parent: NSTickSlider) { self.parent = parent }
         @objc func changed(_ sender: NSSlider) { parent.value = Int(sender.doubleValue.rounded()) }
