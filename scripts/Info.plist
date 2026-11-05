@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Snapframe</string>
+	<key>CFBundleDisplayName</key>
+	<string>Snapframe</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.dwlt.snapframe</string>
+	<key>CFBundleExecutable</key>
+	<string>Snapframe</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__BUILD__</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Snapframe records your microphone when you enable it for screen recordings.</string>
+	<key>SnapframeUpdateURL</key>
+	<string>__UPDATE_URL__</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.dwlt.snapframe</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>snapframe</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

@@ -1,0 +1,11 @@
+.build/
+dist/
+.DS_Store
+.swiftpm/
+.qa/
+.work/
+updates/
+dist-old-kadr/
+DerivedData/
+*.log
+.env*
