@@ -107,3 +107,7 @@ Optional build settings come from the environment or from `~/.config/snapframe/b
 script, never part of the repo): `SNAPFRAME_SIGN_IDENTITY` (plus `SNAPFRAME_SIGN_KEYCHAIN` and
 `SNAPFRAME_SIGN_KEYCHAIN_PASSWORD` if the identity lives in its own keychain) for a stable signature, and
 `SNAPFRAME_UPDATE_URL` for a self-hosted update feed published with `scripts/publish-update.sh`.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
