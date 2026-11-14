@@ -8,7 +8,7 @@ enum Wallpaper {
     }
 
     /// The image to show for a screen, or nil when the setting is a plain colour (or nothing loadable).
-    static func image(for screen: NSScreen?) -> CGImage? {
+    static func image(for screen: NSScreen?) async -> CGImage? {
         switch Prefs.enumValue(PrefKey.wallpaperMode, WallpaperMode.desktop) {
         case .plainColor:
             return nil
@@ -16,13 +16,15 @@ enum Wallpaper {
             let path = (Prefs.string(PrefKey.wallpaperCustomPath) as NSString).expandingTildeInPath
             return path.isEmpty ? nil : load(URL(fileURLWithPath: path))
         case .desktop:
-            guard let screen, let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
+            guard let screen else { return nil }
+            if CGPreflightScreenCaptureAccess(), let live = try? await ScreenGrabber.grabWallpaper(screen) { return live }
+            guard let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
             return load(url)
         }
     }
 
-    static func background(for screen: NSScreen?) -> WindowComposer.Background {
-        if let img = image(for: screen) { return .image(img) }
+    static func background(for screen: NSScreen?) async -> WindowComposer.Background {
+        if let img = await image(for: screen) { return .image(img) }
         return .color(plainColor.usingColorSpace(.sRGB)?.cgColor ?? plainColor.cgColor)
     }
 

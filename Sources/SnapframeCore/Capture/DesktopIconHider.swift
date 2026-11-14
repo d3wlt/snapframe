@@ -10,39 +10,39 @@ public final class DesktopIconHider {
     private var temporarilyHidden = false
     private var windows: [NSWindow] = []
     private var screenObserver: NSObjectProtocol?
+    /// Bumped by every show/tear-down so a slower, older `show()` doesn't put up stale covers.
+    private var generation = 0
 
     /// Window numbers of the cover windows; the capture filter must NOT exclude these.
     var windowNumbers: Set<CGWindowID> { Set(windows.map { CGWindowID($0.windowNumber) }) }
 
     public func toggle() {
         isHidden.toggle()
-        refresh()
+        if isHidden { Task { await show() } } else { tearDown() }
     }
 
-    /// Temporarily hides icons for the duration of a capture if the pref is on.
-    public func hideTemporarily() {
+    /// Hides icons for the duration of a capture if the pref is on, and gives the covers a moment to reach the screen.
+    public func hideTemporarilyAndWait() async {
         guard Prefs.bool(PrefKey.hideDesktopIcons), !isHidden, !temporarilyHidden else { return }
         temporarilyHidden = true
-        refresh()
-    }
-
-    /// Like `hideTemporarily()` but also gives the windows a moment to reach the screen.
-    public func hideTemporarilyAndWait() async {
-        hideTemporarily()
-        if temporarilyHidden { try? await Task.sleep(nanoseconds: 180_000_000) }
+        await show()
+        try? await Task.sleep(nanoseconds: 180_000_000)
     }
 
     public func restoreAfterCapture() {
         guard temporarilyHidden else { return }
         temporarilyHidden = false
-        refresh()
+        if !isHidden { tearDown() }
     }
 
-    private func refresh() {
-        if isHidden || temporarilyHidden { show() } else { tearDown() }
-    }
-
-    private func show() {
+    private func show() async {
+        generation += 1
+        let current = generation
+        let screens = NSScreen.screens
+        var images: [CGImage?] = []
+        for screen in screens { images.append(await Wallpaper.image(for: screen)) }
+        guard current == generation, isHidden || temporarilyHidden else { return }
+        guard NSScreen.screens.map(\.displayID) == screens.map(\.displayID) else { return await show() }
         tearDown(keepObserver: true)
         if screenObserver == nil {
             screenObserver = NotificationCenter.default.addObserver(
@@ -50,13 +50,13 @@ public final class DesktopIconHider {
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, self.isHidden || self.temporarilyHidden else { return }
-                    self.show()
+                    Task { await self.show() }
                 }
             }
         }
         let keep = Prefs.bool(PrefKey.wallpaperKeepAcrossSpaces)
         let level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
-        for screen in NSScreen.screens {
+        for (screen, image) in zip(screens, images) {
             let win = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false,
                                screen: screen)
             win.isReleasedWhenClosed = false
@@ -70,7 +70,7 @@ public final class DesktopIconHider {
             let view = NSView(frame: CGRect(origin: .zero, size: screen.frame.size))
             view.wantsLayer = true
             view.layer?.backgroundColor = Wallpaper.plainColor.cgColor
-            if let image = Wallpaper.image(for: screen) {
+            if let image {
                 view.layer?.contents = image
                 view.layer?.contentsGravity = .resizeAspectFill
                 view.layer?.masksToBounds = true
@@ -82,6 +82,7 @@ public final class DesktopIconHider {
     }
 
     private func tearDown(keepObserver: Bool = false) {
+        generation += 1
         for w in windows { w.orderOut(nil); w.close() }
         windows = []
         if !keepObserver, let o = screenObserver {

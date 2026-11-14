@@ -29,6 +29,27 @@ enum ScreenGrabber {
         return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     }
 
+    /// What the screen shows below the desktop icons, i.e. the wallpaper as currently drawn (dynamic, aerial,
+    /// light/dark variant, fit mode). The image files macOS reports for those are stand-ins that can look different.
+    static func grabWallpaper(_ screen: NSScreen) async throws -> CGImage {
+        guard let id = screen.displayID else { throw GrabError.displayNotFound }
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard let display = content.displays.first(where: { $0.displayID == id }) else { throw GrabError.displayNotFound }
+        let iconLevel = Int(CGWindowLevelForKey(.desktopIconWindow))
+        let below = content.windows.filter { $0.windowLayer < iconLevel && $0.frame.intersects(display.frame) }
+        // Only Window Server backstops (no bundle id) = no wallpaper drawn here, e.g. a full-screen Space.
+        guard below.contains(where: { !($0.owningApplication?.bundleIdentifier ?? "").isEmpty }) else {
+            throw GrabError.windowNotFound
+        }
+        let config = SCStreamConfiguration()
+        config.width = max(1, Int((screen.frame.width * screen.backingScaleFactor).rounded()))
+        config.height = max(1, Int((screen.frame.height * screen.backingScaleFactor).rounded()))
+        config.showsCursor = false
+        config.pixelFormat = kCVPixelFormatType_32BGRA
+        return try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: display, including: below),
+                                                          configuration: config)
+    }
+
     /// Image of a single window without its shadow (the composer draws the shadow) and the pixel scale used.
     static func grabWindow(_ windowID: CGWindowID) async throws -> (image: CGImage, scale: CGFloat) {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)

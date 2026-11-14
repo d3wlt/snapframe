@@ -50,7 +50,7 @@ public final class CaptureService {
             try? await Task.sleep(nanoseconds: 150_000_000)
             do {
                 let shot = try await ScreenGrabber.grabWindow(pick.window.id)
-                let composed = Self.composeWindow(shot.image, windowFrame: pick.window.frame, modifiers: pick.modifiers)
+                let composed = await Self.composeWindow(shot.image, windowFrame: pick.window.frame, modifiers: pick.modifiers)
                 return try ItemFactory.makeImageItem(composed ?? shot.image, scale: shot.scale)
             } catch {
                 Self.fail("Window capture failed", error)
@@ -160,7 +160,7 @@ public final class CaptureService {
     }
 
     /// Applies the Wallpaper/window settings (modifiers: ⌥ = no shadow, ⇧ = transparent).
-    static func composeWindow(_ window: CGImage, windowFrame: CGRect, modifiers: NSEvent.ModifierFlags) -> CGImage? {
+    static func composeWindow(_ window: CGImage, windowFrame: CGRect, modifiers: NSEvent.ModifierFlags) async -> CGImage? {
         let transparent = modifiers.contains(.shift)
             || Prefs.enumValue(PrefKey.windowBackground, WindowBackground.wallpaper) == .transparent
         let shadow = Prefs.bool(PrefKey.windowShadow) && !modifiers.contains(.option)
@@ -169,7 +169,7 @@ public final class CaptureService {
         let screen = NSScreen.screens.max {
             $0.frame.intersection(windowFrame).area < $1.frame.intersection(windowFrame).area
         }
-        let background: WindowComposer.Background = transparent ? .transparent : Wallpaper.background(for: screen)
+        let background: WindowComposer.Background = transparent ? .transparent : await Wallpaper.background(for: screen)
         return WindowComposer.compose(window: window, background: background, padding: pad, shadow: shadow)
     }
 

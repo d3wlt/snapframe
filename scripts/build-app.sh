@@ -30,7 +30,7 @@ else
   if [[ -f "$CONFIG" ]]; then source "$CONFIG"; fi
 fi
 
-VERSION="${SNAPFRAME_VERSION:-0.1.6}"
+VERSION="${SNAPFRAME_VERSION:-0.1.7}"
 BUILD="${SNAPFRAME_BUILD:-$(date +%Y%m%d%H%M)}"
 APP="dist/Snapframe.app"
 
