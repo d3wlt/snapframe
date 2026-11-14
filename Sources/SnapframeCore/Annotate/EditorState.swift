@@ -127,6 +127,12 @@ final class EditorState: ObservableObject {
     /// Pending (uncommitted) crop while the crop tool is active.
     var cropDraft: CGRect?
 
+    /// True while the document has edits not yet written, including an unapplied crop draft.
+    var hasUnsavedChanges: Bool { isDirty || (cropDraft != nil && cropDraft != doc.cropRect) }
+
+    /// True while the background was applied by entering the Background tool and no background control has touched it.
+    private var backgroundIsTentative = false
+
     /// Fires after every change that needs the canvas to repaint / relayout.
     var onChange: (() -> Void)?
 
@@ -188,6 +194,7 @@ final class EditorState: ObservableObject {
         doc.background = s.background
         cropDraft = nil
         lastUndoTag = nil
+        backgroundIsTentative = false
         if let sel = selection, index(of: sel) == nil { selection = nil }
         changed()
     }
@@ -258,7 +265,24 @@ final class EditorState: ObservableObject {
 
     // MARK: Background
 
+    /// The canvas only shows the backdrop inside the Background tool, so a default applied on entry must not outlive an untouched visit.
+    func enterBackgroundTool() {
+        guard doc.background == nil else { return }
+        applyPreset(BackgroundStyle.builtIns[1])
+        backgroundIsTentative = true
+    }
+
+    func leaveBackgroundTool() {
+        guard backgroundIsTentative else { return }
+        backgroundIsTentative = false
+        guard let prev = undoStack.popLast() else { return }
+        doc.background = prev.background
+        lastUndoTag = nil
+        changed()
+    }
+
     func updateBackground(tag: String = "background", _ change: (inout BackgroundStyle) -> Void) {
+        backgroundIsTentative = false
         let before = snapshot
         var style = doc.background ?? BackgroundStyle.builtIns[1]
         change(&style)
@@ -268,12 +292,14 @@ final class EditorState: ObservableObject {
     }
 
     func applyPreset(_ preset: BackgroundStyle) {
+        backgroundIsTentative = false
         let before = snapshot
         doc.background = preset
         registerUndo(before)
     }
 
     func removeBackground() {
+        backgroundIsTentative = false
         guard doc.background != nil else { return }
         let before = snapshot
         doc.background = nil

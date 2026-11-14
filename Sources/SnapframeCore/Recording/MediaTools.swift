@@ -330,12 +330,31 @@ public enum VideoTrimmer {
         }
     }
 
-    /// Writes `range` of the video at `url` to `output` (MP4). Tries passthrough first (no re-encode)
-    /// and falls back to re-encoding. With `mute` the audio tracks are dropped.
+    /// Writes `range` of the video at `url` to `output` (MP4). Without a cutting range the samples are copied
+    /// (passthrough, falling back to the export presets). A real cut is re-encoded sample by sample: the
+    /// recordings have a 2 s keyframe interval, so passthrough or an export session would keep the cut footage
+    /// back to the previous keyframe and hide it with an edit list. With `mute` the audio tracks are dropped.
     public static func export(url: URL, range: CMTimeRange?, mute: Bool, to output: URL) async throws {
         let asset = AVURLAsset(url: url)
         let duration = try await asset.load(.duration)
-        let span = range ?? CMTimeRange(start: .zero, duration: duration)
+        if let range, range.start > .zero || range.end < duration {
+            guard let video = try await asset.loadTracks(withMediaType: .video).first else { throw TrimError.exportFailed("no video track") }
+            let audio = mute ? [] : try await asset.loadTracks(withMediaType: .audio)
+            let hint = try await video.load(.formatDescriptions).first
+            let size = try await video.load(.naturalSize)
+            let transform = try await video.load(.preferredTransform)
+            let bitRate = try await video.load(.estimatedDataRate)
+            do {
+                try await Task.detached {
+                    try reencode(asset: asset, video: video, audio: audio, hint: hint, size: size, transform: transform,
+                                 bitRate: bitRate, range: range, to: output)
+                }.value
+            } catch {
+                try? FileManager.default.removeItem(at: output)
+                throw error
+            }
+            return
+        }
 
         let source: AVAsset
         if mute {
@@ -354,7 +373,6 @@ public enum VideoTrimmer {
         for preset in [AVAssetExportPresetPassthrough, AVAssetExportPresetHighestQuality] {
             try? FileManager.default.removeItem(at: output)
             guard let session = AVAssetExportSession(asset: source, presetName: preset) else { continue }
-            session.timeRange = span
             do {
                 try await session.export(to: output, as: .mp4)
                 return
@@ -363,6 +381,111 @@ public enum VideoTrimmer {
             }
         }
         throw TrimError.exportFailed(lastError?.localizedDescription ?? "unsupported")
+    }
+
+    private static func reencode(asset: AVAsset, video: AVAssetTrack, audio: [AVAssetTrack], hint: CMFormatDescription?,
+                                 size: CGSize, transform: CGAffineTransform, bitRate: Float, range: CMTimeRange,
+                                 to output: URL) throws {
+        let reader = try AVAssetReader(asset: asset)
+        reader.timeRange = range
+        let vOut = AVAssetReaderTrackOutput(track: video, outputSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+        ])
+        guard reader.canAdd(vOut) else { throw TrimError.exportFailed("unsupported video track") }
+        reader.add(vOut)
+        var aOut: AVAssetReaderAudioMixOutput?
+        if !audio.isEmpty {
+            let out = AVAssetReaderAudioMixOutput(audioTracks: audio, audioSettings: [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: 48_000,
+                AVNumberOfChannelsKey: 2,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false,
+            ])
+            guard reader.canAdd(out) else { throw TrimError.exportFailed("unsupported audio track") }
+            reader.add(out)
+            aOut = out
+        }
+
+        let isHEVC = hint.map { CMFormatDescriptionGetMediaSubType($0) == kCMVideoCodecType_HEVC } ?? false
+        let writer = try AVAssetWriter(outputURL: output, fileType: .mp4)
+        let vIn = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: isHEVC ? AVVideoCodecType.hevc : AVVideoCodecType.h264,
+            AVVideoWidthKey: Int(size.width),
+            AVVideoHeightKey: Int(size.height),
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: max(Int(bitRate), 1_000_000),
+                AVVideoMaxKeyFrameIntervalDurationKey: 2,
+                AVVideoAllowFrameReorderingKey: false,
+            ],
+        ])
+        vIn.transform = transform
+        guard writer.canAdd(vIn) else { throw TrimError.exportFailed("cannot write video") }
+        writer.add(vIn)
+        var aIn: AVAssetWriterInput?
+        if aOut != nil {
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: 48_000,
+                AVNumberOfChannelsKey: 2,
+                AVEncoderBitRateKey: 128_000,
+            ])
+            guard writer.canAdd(input) else { throw TrimError.exportFailed("cannot write audio") }
+            writer.add(input)
+            aIn = input
+        }
+        guard reader.startReading() else { throw TrimError.exportFailed(reader.error?.localizedDescription ?? "cannot read") }
+        guard writer.startWriting() else { throw TrimError.exportFailed(writer.error?.localizedDescription ?? "cannot write") }
+        writer.startSession(atSourceTime: .zero)
+
+        var videoDone = false, audioDone = aOut == nil
+        while !(videoDone && audioDone) {
+            var progressed = false
+            if !videoDone, vIn.isReadyForMoreMediaData {
+                if let sb = vOut.copyNextSampleBuffer() {
+                    if CMSampleBufferGetPresentationTimeStamp(sb) >= range.start, let shifted = retimed(sb, by: range.start) { vIn.append(shifted) }
+                } else {
+                    vIn.markAsFinished()
+                    videoDone = true
+                }
+                progressed = true
+            }
+            if !audioDone, let aOut, let aIn, aIn.isReadyForMoreMediaData {
+                if let sb = aOut.copyNextSampleBuffer() {
+                    if let shifted = retimed(sb, by: range.start) { aIn.append(shifted) }
+                } else {
+                    aIn.markAsFinished()
+                    audioDone = true
+                }
+                progressed = true
+            }
+            if writer.status == .failed || reader.status == .failed {
+                writer.cancelWriting()
+                throw TrimError.exportFailed((writer.error ?? reader.error)?.localizedDescription ?? "unknown")
+            }
+            if !progressed { Thread.sleep(forTimeInterval: 0.002) }
+        }
+        let done = DispatchSemaphore(value: 0)
+        writer.finishWriting { done.signal() }
+        done.wait()
+        guard writer.status == .completed else { throw TrimError.exportFailed(writer.error?.localizedDescription ?? "unknown") }
+    }
+
+    private static func retimed(_ sample: CMSampleBuffer, by offset: CMTime) -> CMSampleBuffer? {
+        var count: CMItemCount = 0
+        CMSampleBufferGetSampleTimingInfoArray(sample, entryCount: 0, arrayToFill: nil, entriesNeededOut: &count)
+        var timings = [CMSampleTimingInfo](repeating: CMSampleTimingInfo(), count: count)
+        CMSampleBufferGetSampleTimingInfoArray(sample, entryCount: count, arrayToFill: &timings, entriesNeededOut: &count)
+        for i in timings.indices {
+            timings[i].presentationTimeStamp = timings[i].presentationTimeStamp - offset
+            if timings[i].decodeTimeStamp.isValid { timings[i].decodeTimeStamp = timings[i].decodeTimeStamp - offset }
+        }
+        var out: CMSampleBuffer?
+        CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: sample, sampleTimingEntryCount: count,
+                                              sampleTimingArray: timings, sampleBufferOut: &out)
+        return out
     }
 }
 

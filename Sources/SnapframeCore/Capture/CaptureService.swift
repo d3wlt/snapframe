@@ -174,7 +174,7 @@ public final class CaptureService {
     }
 
     private static func fail(_ title: String, _ error: Error) {
-        NSLog("Snapframe: \(title): \(error)")
+        NSLog("%@", "Snapframe: \(title): \(error)")
         Toast.show(title, symbol: "exclamationmark.triangle")
     }
 }

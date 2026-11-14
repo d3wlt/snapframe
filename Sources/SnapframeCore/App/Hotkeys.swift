@@ -38,7 +38,7 @@ public final class HotkeyCenter {
                 actionsByID[id] = action
             } else {
                 failedActions.insert(action)
-                NSLog("Snapframe: could not register hotkey \(sc.displayString) for \(action.rawValue) (status \(status))")
+                NSLog("%@", "Snapframe: could not register hotkey \(sc.displayString) for \(action.rawValue) (status \(status))")
             }
         }
         NotificationCenter.default.post(name: Self.didReload, object: nil)

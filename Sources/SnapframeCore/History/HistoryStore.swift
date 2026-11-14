@@ -34,9 +34,10 @@ public final class HistoryStore {
     private var timer: Timer?
     private var updateObserver: NSObjectProtocol?
 
-    /// Items still on screen (Quick Access cards, pins) are never pruned. Main thread only.
+    /// Items still on screen (Quick Access cards, pins, open editors) are never pruned. Main thread only.
     var inUseIDs: () -> Set<UUID> = {
         QuickAccessController.shared.openItemIDs.union(PinController.shared.openItemIDs)
+            .union(AnnotationEditor.openItemIDs).union(VideoEditor.openItemIDs)
     }
 
     init(directory: URL?) {
@@ -133,8 +134,8 @@ public final class HistoryStore {
             let stamp = Int(Date().timeIntervalSince1970)
             let aside = dir.appendingPathComponent("index.corrupt-\(stamp).json")
             do { try FileManager.default.moveItem(at: dir.appendingPathComponent("index.json"), to: aside) }
-            catch { NSLog("Snapframe: could not set aside corrupt history index: \(error)") }
-            NSLog("Snapframe: history index unreadable, moved to \(aside.lastPathComponent)")
+            catch { NSLog("%@", "Snapframe: could not set aside corrupt history index: \(error)") }
+            NSLog("%@", "Snapframe: history index unreadable, moved to \(aside.lastPathComponent)")
             return
         }
         let fm = FileManager.default
@@ -156,7 +157,7 @@ public final class HistoryStore {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try encoder.encode(storage).write(to: indexURL, options: .atomic)
         } catch {
-            NSLog("Snapframe: could not write history index: \(error)")
+            NSLog("%@", "Snapframe: could not write history index: \(error)")
         }
     }
 

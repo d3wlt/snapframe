@@ -35,16 +35,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if RecordingController.shared.isBusy {
+            return confirmQuit(message: "A recording is in progress",
+                               detail: "If you quit now, the recording will be lost.") ? .terminateNow : .terminateCancel
+        }
+        if AnnotationEditor.hasUnsavedChanges {
+            return confirmQuit(message: "You have unsaved annotations",
+                               detail: "If you quit now, your changes will be lost.") ? .terminateNow : .terminateCancel
+        }
+        return .terminateNow
+    }
+
+    private func confirmQuit(message: String, detail: String) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = detail
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Quit Anyway")
+        return alert.runModal() == .alertSecondButtonReturn
+    }
+
     /// snapframe://<action>  (e.g. snapframe://capture-area). Ignored unless enabled in Advanced settings.
     @objc func handleURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         guard let string = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let url = URL(string: string), url.scheme == "snapframe" else { return }
         guard Prefs.bool(PrefKey.urlSchemeEnabled) else {
-            NSLog("Snapframe: URL scheme disabled, ignoring \(string)")
+            NSLog("%@", "Snapframe: URL scheme disabled, ignoring \(string)")
             return
         }
         guard let host = url.host, let action = SnapframeAction(rawValue: host) else {
-            NSLog("Snapframe: unknown URL action \(string)")
+            NSLog("%@", "Snapframe: unknown URL action \(string)")
             return
         }
         ActionRouter.shared.perform(action)

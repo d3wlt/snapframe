@@ -284,27 +284,36 @@ public final class RecordingController {
             if format == .video, prefs.systemAudio, prefs.microphone {
                 // Best effort: on failure the file keeps its two audio tracks.
                 do { try await AudioTrackMixer.mergeAudioTracks(in: output.url) }
-                catch { NSLog("Snapframe: audio mix failed: \(error)") }
+                catch { NSLog("%@", "Snapframe: audio mix failed: \(error)") }
             }
             var url = output.url
             var kind = MediaKind.video
             var pixelSize = output.pixelSize
+            var gifFailure: Error?
             if format == .gif {
                 let panel = ConvertingPanel(screen: screen)
                 defer { panel.close() }
                 let gifURL = FileManager.default.temporaryDirectory.appendingPathComponent("Snapframe-recording-\(UUID().uuidString).gif")
-                let result = try await GIFConverter.convert(videoURL: output.url, to: gifURL, fps: prefs.gifFPS,
-                                                            maxWidth: prefs.gifMaxWidth,
-                                                            progress: { value in Task { @MainActor in panel.setProgress(value) } })
-                try? FileManager.default.removeItem(at: output.url)
-                url = result.url
-                kind = .gif
-                pixelSize = result.pixelSize
+                do {
+                    let result = try await GIFConverter.convert(videoURL: output.url, to: gifURL, fps: prefs.gifFPS,
+                                                                maxWidth: prefs.gifMaxWidth,
+                                                                progress: { value in Task { @MainActor in panel.setProgress(value) } })
+                    try? FileManager.default.removeItem(at: output.url)
+                    url = result.url
+                    kind = .gif
+                    pixelSize = result.pixelSize
+                } catch {
+                    try? FileManager.default.removeItem(at: gifURL)
+                    gifFailure = error
+                }
             }
             let itemScale = max(1, pointWidth > 0 ? pixelSize.width / pointWidth : scale)
             let item = try ItemFactory.makeMediaItem(movedFrom: url, kind: kind, pixelSize: pixelSize, scale: itemScale)
             reset()
             AfterCapture.handle(item)
+            if let gifFailure {
+                showError("GIF conversion failed", gifFailure, extra: "The recording was saved as a video instead.")
+            }
         } catch {
             reset()
             if let failure {

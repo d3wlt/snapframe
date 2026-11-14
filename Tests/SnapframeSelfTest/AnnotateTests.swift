@@ -1,4 +1,6 @@
 import AppKit
+import ImageIO
+import UniformTypeIdentifiers
 @testable import SnapframeCore
 
 /// RGBA bytes (premultiplied, sRGB) of an image, for pixel sampling.
@@ -59,6 +61,18 @@ private func noiseImage(width: Int, height: Int) -> CGImage {
                    space: CGColorSpace(name: CGColorSpace.sRGB)!,
                    bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
                    provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+}
+
+private func scratchFile(_ name: String) -> URL {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("snapframe-annotate-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir.appendingPathComponent(name)
+}
+
+private func writeImage(_ images: [CGImage], as type: UTType, to url: URL, properties: [CFString: Any] = [:]) {
+    let dest = CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, images.count, nil)!
+    for image in images { CGImageDestinationAddImage(dest, image, properties as CFDictionary) }
+    CGImageDestinationFinalize(dest)
 }
 
 private let red = NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
@@ -357,6 +371,62 @@ extension SelfTests {
             let px = Pixels(out)
             try check(px.at(35, 35).r > 240 && px.at(35, 35).g < 20, "annotation inside the framed image")
             try check(px.at(3, 3).b == 255 && px.at(3, 3).r == 0, "backdrop")
+        },
+        TestCase("Saving never writes one format under another extension") {
+            let img = solidImage(width: 8, height: 8)
+            let webp = scratchFile("photo.webp")
+            do { try EditorWindowController.write(img, to: webp); try check(false, "expected write to throw") } catch is ImageIOWriter.WriteError {}
+            try check(!FileManager.default.fileExists(atPath: webp.path), "no file written")
+            try check(!EditorWindowController.canOverwrite(webp))
+            let png = scratchFile("shot.png")
+            try EditorWindowController.write(img, to: png)
+            try check(EditorWindowController.canOverwrite(png))
+        },
+        TestCase("Multi-frame sources are not overwritten in place") {
+            let frames = [solidImage(width: 8, height: 8, gray: 0), solidImage(width: 8, height: 8, gray: 1)]
+            let gif = scratchFile("anim.gif")
+            writeImage(frames, as: .gif, to: gif)
+            try check(!EditorWindowController.canOverwrite(gif))
+            let single = scratchFile("one.gif")
+            writeImage([frames[0]], as: .gif, to: single)
+            try check(EditorWindowController.canOverwrite(single))
+        },
+        TestCase("EXIF orientation is applied when loading the base image") {
+            let url = scratchFile("rotated.jpg")
+            writeImage([solidImage(width: 40, height: 20)], as: .jpeg, to: url, properties: [kCGImagePropertyOrientation: 6])
+            let img = EditorWindowController.loadBaseImage(url)!
+            try checkEqual(img.width, 20)
+            try checkEqual(img.height, 40)
+            let plain = scratchFile("plain.jpg")
+            writeImage([solidImage(width: 40, height: 20)], as: .jpeg, to: plain)
+            try checkEqual(EditorWindowController.loadBaseImage(plain)!.width, 40)
+        },
+        TestCase("An unapplied crop draft counts as unsaved") {
+            let state = EditorState(doc: AnnotationDocument(baseImage: solidImage(width: 100, height: 100), scale: 1))
+            try check(!state.hasUnsavedChanges)
+            state.cropDraft = CGRect(x: 10, y: 10, width: 50, height: 50)
+            try check(state.hasUnsavedChanges)
+            state.cropDraft = state.doc.cropRect
+            try check(!state.hasUnsavedChanges)
+        },
+        TestCase("Background applied on tool entry is removed again unless a control touched it") {
+            let state = EditorState(doc: AnnotationDocument(baseImage: solidImage(width: 100, height: 100), scale: 1))
+            state.enterBackgroundTool()
+            try check(state.doc.background != nil)
+            state.leaveBackgroundTool()
+            try check(state.doc.background == nil)
+            try check(!state.hasUnsavedChanges && !state.canUndo)
+
+            state.enterBackgroundTool()
+            state.updateBackground { $0.padding = 0.2 }
+            state.leaveBackgroundTool()
+            try check(state.doc.background?.padding == 0.2)
+
+            state.removeBackground()
+            state.enterBackgroundTool()
+            state.undo()
+            state.leaveBackgroundTool()
+            try check(state.doc.background == nil)
         },
     ]
 }

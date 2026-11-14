@@ -5,6 +5,8 @@ import AppKit
 public enum VideoEditor {
     private static var windows: [UUID: VideoEditorWindow] = [:]
 
+    static var openItemIDs: Set<UUID> { Set(windows.keys) }
+
     /// Opens the trim editor for a video or GIF; saving writes back to item.fileURL and posts .snapframeItemUpdated.
     public static func open(_ item: CapturedItem) {
         guard item.kind != .image else { return }
@@ -261,6 +263,7 @@ final class VideoEditorWindow: NSWindow, NSWindowDelegate {
                 if let gifSize { updated.pixelSize = gifSize }
                 HistoryStore.shared.update(updated)
                 NotificationCenter.default.post(name: .snapframeItemUpdated, object: updated)
+                Exporter.syncCopiesReportingFailure(of: updated)
                 setBusy(false, "")
                 close()
             } catch {

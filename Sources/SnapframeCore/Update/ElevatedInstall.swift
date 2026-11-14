@@ -96,6 +96,7 @@ public enum ElevatedInstall {
         // b. Standard ownership for /Applications apps.
         if hooks?.skipChown != true { lines.append("/usr/sbin/chown -R root:admin \"$STAGE\"") }
         lines.append("/bin/chmod -R go-w \"$STAGE\"")
+        lines.append("/bin/chmod -RN \"$STAGE\"")
         if let hook = hooks?.beforeVerify { lines.append(hook) }
         lines += [
             // c. Re-verify as root on the staged copy: signature against the running app's own requirement, then

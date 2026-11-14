@@ -9,13 +9,13 @@ import Darwin
 /// Writes a small MP4 (and optionally an AAC track): `bands` solid colours, each lasting `seconds / bands`.
 private func makeSyntheticVideo(seconds: Double = 1.0, fps: Int = 10, size: CGSize = CGSize(width: 320, height: 180),
                                 bands: Int = 5, withAudio: Bool = false, audioTracks: Int = 1, textured: Bool = false,
-                                movingSquare: Bool = false) throws -> URL {
+                                movingSquare: Bool = false, keyFrameInterval: Int = 1) throws -> URL {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("snapframe-synth-\(UUID().uuidString).mp4")
     let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
     let video = AVAssetWriterInput(mediaType: .video, outputSettings: [
         AVVideoCodecKey: AVVideoCodecType.h264,
         AVVideoWidthKey: Int(size.width), AVVideoHeightKey: Int(size.height),
-        AVVideoCompressionPropertiesKey: [AVVideoMaxKeyFrameIntervalKey: 1, AVVideoAverageBitRateKey: 2_000_000],
+        AVVideoCompressionPropertiesKey: [AVVideoMaxKeyFrameIntervalKey: keyFrameInterval, AVVideoAverageBitRateKey: 2_000_000],
     ])
     let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: video, sourcePixelBufferAttributes: [
         kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -409,6 +409,32 @@ extension SelfTests {
 
             try await VideoTrimmer.export(url: video, range: nil, mute: false, to: plain)
             try checkEqual(try await AVURLAsset(url: plain).loadTracks(withMediaType: .audio).count, 1)
+        },
+        TestCase("Trim: a range starting mid-GOP exports no footage from before the start or after the end") {
+            let video = try makeSyntheticVideo(seconds: 6.0, fps: 15, bands: 6, textured: true, keyFrameInterval: 30)
+            let trimmed = tempURL("mp4")
+            defer { [video, trimmed].forEach { try? FileManager.default.removeItem(at: $0) } }
+            try await VideoTrimmer.export(url: video, range: CMTimeRange(start: t(3.5), duration: t(1.5)), mute: false, to: trimmed)
+
+            let asset = AVURLAsset(url: trimmed)
+            guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw CheckFailure(description: "no video track") }
+            let reader = try AVAssetReader(asset: asset)
+            let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+            reader.add(output)
+            try check(reader.startReading(), "reader: \(String(describing: reader.error))")
+            var times: [Double] = []
+            while let sample = output.copyNextSampleBuffer() {
+                let pts = CMSampleBufferGetPresentationTimeStamp(sample)
+                if pts.isNumeric { times.append(pts.seconds) }
+            }
+            let span = (times.max() ?? 0) - (times.min() ?? 0)
+            try check(span < 1.5 + 1.0 / 15, "stored samples span \(span)s for a 1.5s range")
+            try check(times.count <= 25, "\(times.count) stored samples for a 1.5s range at 15 fps")
+            let segments = try await track.load(.segments)
+            try check(segments.allSatisfy { $0.isEmpty || $0.timeMapping.source.start.seconds < 2.0 / 15 },
+                      "edit list hides leading samples: \(segments.map { $0.timeMapping.source.start.seconds })")
+            let duration = try await asset.load(.duration).seconds
+            try check(abs(duration - 1.5) < 0.2, "trimmed duration \(duration)")
         },
         TestCase("Recording: pause timeline ignores pauses before the first frame and never goes negative") {
             var tl = PauseTimeline()

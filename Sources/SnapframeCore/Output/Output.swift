@@ -55,8 +55,9 @@ public enum Exporter {
     /// Returns the saved URL and records it on the item in history.
     @discardableResult
     public static func save(_ item: CapturedItem, ask: Bool = false) -> URL? {
-        var fileName = item.exportFileName
-        var dir = Prefs.exportDirectory
+        let fileName = item.exportFileName
+        let dir = Prefs.exportDirectory
+        var chosen: URL?
         if ask || Prefs.bool(PrefKey.askNameAfterCapture) {
             NSApp.activate(ignoringOtherApps: true)
             let panel = NSSavePanel()
@@ -64,22 +65,62 @@ public enum Exporter {
             panel.directoryURL = dir
             if let type = UTType(filenameExtension: item.fileExtension) { panel.allowedContentTypes = [type] }
             guard panel.runModal() == .OK, let url = panel.url else { return nil }
-            dir = url.deletingLastPathComponent()
-            fileName = url.lastPathComponent
-            try? FileManager.default.removeItem(at: url) // the panel already confirmed replacing
+            chosen = url // the panel already confirmed replacing
         }
         do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let dest = FileNamer.uniqueURL(in: dir, fileName: fileName)
-            try FileManager.default.copyItem(at: item.fileURL, to: dest)
-            var updated = item
+            let dest: URL
+            if let chosen {
+                dest = chosen
+            } else {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                dest = FileNamer.uniqueURL(in: dir, fileName: fileName)
+            }
+            try place(item.fileURL, at: dest)
+            var updated = HistoryStore.shared.items.first { $0.id == item.id } ?? item
             updated.savedURL = dest
             HistoryStore.shared.update(updated)
             return dest
         } catch {
-            NSLog("Snapframe: save failed: \(error)")
+            NSLog("%@", "Snapframe: save failed: \(error)")
             NSSound.beep()
             return nil
+        }
+    }
+
+    /// Puts a copy of `source` at `dest`. Does nothing when both are the same file; otherwise an existing
+    /// `dest` is replaced only after the new copy has been written next to it.
+    static func place(_ source: URL, at dest: URL) throws {
+        let fm = FileManager.default
+        if source.resolvingSymlinksInPath().standardizedFileURL == dest.resolvingSymlinksInPath().standardizedFileURL { return }
+        let temp = dest.deletingLastPathComponent().appendingPathComponent(".copy-\(UUID().uuidString).\(dest.pathExtension)")
+        do {
+            try fm.copyItem(at: source, to: temp)
+            if fm.fileExists(atPath: dest.path) {
+                _ = try fm.replaceItemAt(dest, withItemAt: temp)
+            } else {
+                try fm.moveItem(at: temp, to: dest)
+            }
+        } catch {
+            try? fm.removeItem(at: temp)
+            throw error
+        }
+    }
+
+    /// After an editor rewrote `item.fileURL`: brings the exported copy and an existing clipboard copy up to date.
+    static func syncCopies(of item: CapturedItem) throws {
+        Clipboard.refreshTempCopy(of: item)
+        if let saved = item.savedURL, FileManager.default.fileExists(atPath: saved.deletingLastPathComponent().path) {
+            try place(item.fileURL, at: saved)
+        }
+    }
+
+    /// For editors: the edit itself is already saved, so a failure here is reported, not thrown.
+    static func syncCopiesReportingFailure(of item: CapturedItem) {
+        do {
+            try syncCopies(of: item)
+        } catch {
+            NSLog("%@", "Snapframe: could not update the exported copy: \(error)")
+            Toast.show("Saved, but the exported copy could not be updated", symbol: "exclamationmark.triangle")
         }
     }
 }
@@ -111,17 +152,32 @@ public enum Clipboard {
     /// Hard-links (or copies) the item into a temp folder under its export file name.
     public static func namedCopy(of item: CapturedItem) -> URL? {
         if let saved = item.savedURL, FileManager.default.fileExists(atPath: saved.path) { return saved }
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Snapframe/\(item.id.uuidString)", isDirectory: true)
-        let dest = dir.appendingPathComponent(item.exportFileName)
+        return makeTempCopy(of: item)
+    }
+
+    /// Re-links an already existing temp copy to the item's current file, e.g. after an editor replaced it.
+    static func refreshTempCopy(of item: CapturedItem) {
+        guard FileManager.default.fileExists(atPath: tempCopyURL(of: item).path) else { return }
+        _ = makeTempCopy(of: item)
+    }
+
+    private static func tempCopyURL(of item: CapturedItem) -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("Snapframe/\(item.id.uuidString)", isDirectory: true)
+            .appendingPathComponent(item.exportFileName)
+    }
+
+    private static func makeTempCopy(of item: CapturedItem) -> URL? {
+        let dest = tempCopyURL(of: item)
         do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? FileManager.default.removeItem(at: dest)
             do { try FileManager.default.linkItem(at: item.fileURL, to: dest) } catch {
                 try FileManager.default.copyItem(at: item.fileURL, to: dest)
             }
             return dest
         } catch {
-            NSLog("Snapframe: clipboard file copy failed: \(error)")
+            NSLog("%@", "Snapframe: clipboard file copy failed: \(error)")
             return nil
         }
     }

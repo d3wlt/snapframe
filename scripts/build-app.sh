@@ -30,7 +30,7 @@ else
   if [[ -f "$CONFIG" ]]; then source "$CONFIG"; fi
 fi
 
-VERSION="${SNAPFRAME_VERSION:-0.1.5}"
+VERSION="${SNAPFRAME_VERSION:-0.1.6}"
 BUILD="${SNAPFRAME_BUILD:-$(date +%Y%m%d%H%M)}"
 APP="dist/Snapframe.app"
 
@@ -50,8 +50,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Snapframe"
 UPDATE_URL="${SNAPFRAME_UPDATE_URL:-}"
-sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" -e "s|__UPDATE_URL__|$UPDATE_URL|" \
-    scripts/Info.plist > "$APP/Contents/Info.plist"
+sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" scripts/Info.plist > "$APP/Contents/Info.plist"
+plutil -replace SnapframeUpdateURL -string "$UPDATE_URL" "$APP/Contents/Info.plist"
 if [[ -f Resources/AppIcon.icns ]]; then cp Resources/AppIcon.icns "$APP/Contents/Resources/"; fi
 
 SIGN_ID="${SNAPFRAME_SIGN_IDENTITY:-}"
@@ -63,12 +63,12 @@ if [[ -n "$SIGN_ID" ]]; then
     fi
     KEYCHAIN_ARGS=(--keychain "$SNAPFRAME_SIGN_KEYCHAIN")
   fi
-  codesign --force --sign "$SIGN_ID" "${KEYCHAIN_ARGS[@]}" --timestamp=none \
+  codesign --force --sign "$SIGN_ID" ${KEYCHAIN_ARGS[@]+"${KEYCHAIN_ARGS[@]}"} --options runtime --timestamp=none \
            --entitlements scripts/Snapframe.entitlements "$APP"
   echo "Signed with \"$SIGN_ID\""
 else
   echo "note: no SNAPFRAME_SIGN_IDENTITY, using an ad-hoc signature" >&2
-  codesign --force --sign - --entitlements scripts/Snapframe.entitlements "$APP"
+  codesign --force --sign - --options runtime --entitlements scripts/Snapframe.entitlements "$APP"
 fi
 codesign --verify --verbose=1 "$APP"
 

@@ -8,12 +8,22 @@ public enum AnnotationEditor {
     private static var controllers: [EditorWindowController] = []
 
     /// True while any editor window has unsaved changes (checked before quitting to install an update).
-    static var hasUnsavedChanges: Bool { controllers.contains { $0.isDirty } }
+    static var hasUnsavedChanges: Bool { controllers.contains { $0.state.hasUnsavedChanges } }
+
+    static var openItemIDs: Set<UUID> { Set(controllers.map { $0.item.id }) }
 
     /// Opens the editor window for a captured image. Saving writes the flattened image back to
     /// item.fileURL and posts .snapframeItemUpdated.
     public static func open(_ item: CapturedItem) {
         guard item.kind == .image else { NSSound.beep(); return }
+        if let existing = controllers.first(where: {
+            $0.item.id == item.id || $0.item.fileURL.standardizedFileURL == item.fileURL.standardizedFileURL
+        }) {
+            if existing.window.isMiniaturized { existing.window.deminiaturize(nil) }
+            NSApp.activate(ignoringOtherApps: true)
+            existing.window.makeKeyAndOrderFront(nil)
+            return
+        }
         guard let controller = EditorWindowController(item: item, index: controllers.count) else {
             NSSound.beep()
             return
@@ -60,7 +70,6 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
 
     private(set) var item: CapturedItem
     let state: EditorState
-    var isDirty: Bool { state.isDirty }
     let window: EditorWindow
     private let canvas: AnnotationCanvasView
     private let scroll = NSScrollView()
@@ -75,9 +84,7 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
     private let showColorNames = Prefs.bool(PrefKey.annShowColorNames)
 
     init?(item: CapturedItem, index: Int) {
-        guard let src = CGImageSourceCreateWithURL(item.fileURL as CFURL, nil),
-              let image = CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
-        else { return nil }
+        guard let image = Self.loadBaseImage(item.fileURL) else { return nil }
         self.item = item
         let doc = AnnotationDocument(baseImage: image, scale: item.scale,
                                      autoExpandCanvas: Prefs.bool(PrefKey.annAutoExpandCanvas),
@@ -208,7 +215,7 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
     private func stateChanged() {
         canvas.syncLayout()
         recenter()
-        window.isDocumentEdited = state.isDirty
+        window.isDocumentEdited = state.hasUnsavedChanges
     }
 
     private func recenter() {
@@ -225,12 +232,12 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
         if tool != .select { state.selection = nil }
         if old == .crop && tool != .crop { state.cropDraft = nil }
         if tool == .crop { state.cropDraft = state.doc.cropRect }
-        if tool == .background {
-            if state.doc.background == nil { state.applyPreset(BackgroundStyle.builtIns[1]) }
-        }
+        if old == .background && tool != .background { state.leaveBackgroundTool() }
+        if tool == .background && old != .background { state.enterBackgroundTool() }
         if (tool == .background) != (old == .background), Prefs.bool(PrefKey.annRememberBackgroundTool) {
             Prefs.set(tool == .background, Self.backgroundOpenKey)
         }
+        window.isDocumentEdited = state.hasUnsavedChanges
         sidebar.isHidden = tool != .background
         sidebarWidth.constant = tool == .background ? 280 : 0
         DispatchQueue.main.async { [weak self] in
@@ -350,57 +357,103 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
 
     @discardableResult
     private func save() -> Bool {
+        guard Self.canOverwrite(item.fileURL) else {
+            saveAs(markSaved: true)
+            return false
+        }
         let image = renderFinal()
+        var updated = HistoryStore.shared.items.first { $0.id == item.id } ?? item
         do {
             try Self.write(image, to: item.fileURL)
-            if let saved = item.savedURL, saved.standardizedFileURL != item.fileURL.standardizedFileURL,
-               FileManager.default.fileExists(atPath: saved.deletingLastPathComponent().path) {
-                try Self.write(image, to: saved)
-            }
         } catch {
-            NSLog("Snapframe: annotation save failed: \(error)")
+            NSLog("%@", "Snapframe: annotation save failed: \(error)")
             let alert = NSAlert()
             alert.messageText = "Could not save the image"
             alert.informativeText = error.localizedDescription
             alert.beginSheetModal(for: window)
             return false
         }
-        item.pixelSize = CGSize(width: image.width, height: image.height)
-        HistoryStore.shared.update(item)
-        NotificationCenter.default.post(name: .snapframeItemUpdated, object: item)
+        updated.pixelSize = CGSize(width: image.width, height: image.height)
+        item = updated
+        HistoryStore.shared.update(updated)
+        NotificationCenter.default.post(name: .snapframeItemUpdated, object: updated)
         state.markSaved()
         window.isDocumentEdited = false
+        Exporter.syncCopiesReportingFailure(of: updated)
         return true
     }
 
-    private func saveAs() {
+    /// `markSaved` is for a save that could not overwrite the original in place and was redirected here.
+    private func saveAs(markSaved: Bool = false) {
         let image = renderFinal()
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = item.exportFileName
-        panel.directoryURL = item.savedURL?.deletingLastPathComponent() ?? Prefs.exportDirectory
-        if let type = UTType(filenameExtension: item.fileExtension) { panel.allowedContentTypes = [type] }
-        panel.beginSheetModal(for: window) { response in
+        if Self.canOverwrite(item.fileURL) {
+            panel.nameFieldStringValue = item.exportFileName
+            panel.directoryURL = item.savedURL?.deletingLastPathComponent() ?? Prefs.exportDirectory
+            if let type = UTType(filenameExtension: item.fileExtension) { panel.allowedContentTypes = [type] }
+        } else {
+            panel.nameFieldStringValue = item.fileURL.deletingPathExtension().lastPathComponent + ".png"
+            panel.directoryURL = item.fileURL.deletingLastPathComponent()
+            panel.allowedContentTypes = [.png]
+        }
+        panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
-            do { try Self.write(image, to: url) } catch {
-                NSLog("Snapframe: save as failed: \(error)")
+            do {
+                try Self.write(image, to: url)
+                if markSaved, let self {
+                    self.state.markSaved()
+                    self.window.isDocumentEdited = false
+                }
+            } catch {
+                NSLog("%@", "Snapframe: save as failed: \(error)")
                 NSSound.beep()
             }
         }
     }
 
     private func done() {
-        if state.isDirty {
+        if state.hasUnsavedChanges {
             guard save() else { return }
         }
         forceClose = true
         window.close()
     }
 
-    /// Writes in the format implied by the extension (PNG fallback). JPEG is flattened on white.
+    /// Decodes frame 0 upright; ImageIO applies the EXIF orientation only through the thumbnail path.
+    static func loadBaseImage(_ url: URL) -> CGImage? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+        if let orientation = props?[kCGImagePropertyOrientation] as? Int, orientation > 1,
+           let w = props?[kCGImagePropertyPixelWidth] as? Int, let h = props?[kCGImagePropertyPixelHeight] as? Int {
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: max(w, h),
+                kCGImageSourceShouldCacheImmediately: true,
+            ]
+            if let upright = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) { return upright }
+        }
+        return CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
+    }
+
+    /// ImageIO has no encoder for every type it can decode (webp, avif, dng).
+    static func canEncode(_ type: UTType) -> Bool {
+        let ids = CGImageDestinationCopyTypeIdentifiers() as? [String] ?? []
+        return ids.contains(type.identifier)
+    }
+
+    /// False when saving over `url` would change its format or drop frames.
+    static func canOverwrite(_ url: URL) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension.lowercased()), canEncode(type) else { return false }
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return true }
+        return CGImageSourceGetCount(src) <= 1
+    }
+
+    /// Writes in the format implied by the extension; throws if ImageIO cannot encode it. JPEG is flattened on white.
     static func write(_ image: CGImage, to url: URL) throws {
-        let ext = url.pathExtension.lowercased()
-        var type: UTType = UTType(filenameExtension: ext) ?? .png
-        if !type.conforms(to: .image) { type = .png }
+        guard let type = UTType(filenameExtension: url.pathExtension.lowercased()), canEncode(type) else {
+            throw ImageIOWriter.WriteError.cannotCreate
+        }
         var out = image
         if type == .jpeg, let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
                                               space: CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -410,8 +463,7 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
             ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
             out = ctx.makeImage() ?? image
         }
-        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil)
-                ?? CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil) else {
             throw ImageIOWriter.WriteError.cannotCreate
         }
         var props: [CFString: Any] = [:]
@@ -457,7 +509,7 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         canvas.commitTextEditing()
-        if forceClose || !state.isDirty { return true }
+        if forceClose || !state.hasUnsavedChanges { return true }
         let alert = NSAlert()
         alert.messageText = "Save changes to \u{201C}\(item.baseName)\u{201D}?"
         alert.informativeText = "Your annotations will be lost if you don\u{2019}t save them."
